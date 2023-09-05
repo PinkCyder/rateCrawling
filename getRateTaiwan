@@ -1,0 +1,74 @@
+//程式碼直接寫在華苓流程(Server端)
+//語言：使用AgentFlowScript
+//寫的位置是在流程設計 > Auto節點 > 自動執行的執行動作 裡
+loadLibrary("com.hsiite.Universal");
+importPackage(Packages.org.apache.http.impl.client); // httpclient.jar
+importPackage(Packages.org.apache.http.message); // httpcore.jar
+importPackage(Packages.org.apache.http.client.utils);// httpcore.jar
+importPackage(Packages.org.apache.http.entity);// httpclient.jar
+importPackage(Packages.org.apache.http.util);// httpcore.jar
+importPackage(Packages.org.json);// json_simple.jar
+importPackage(Packages.org.apache.commons.httpclient);
+importPackage(Packages.org.apache.commons.httpclient.methods);
+importPackage(Packages.java.io);
+
+var artIns = MyTask.getArtInstance();  //取得表單最新的instance
+var dataMap = artIns.getAppDataMap();  //Server端取得表格欄位資料或回寫表單用
+//宣告表單上的表格
+var tabRate = dataMap.get("tabRate");
+tabRate.clear();
+
+//取得更新時間
+var mydate=new Packages.pase.agenda.MyDate();  //華苓系統時間
+var ndate=mydate.getCurrentDate("Y/M/D");  //如果要取得時:分加" H:m"
+artIns.setAppValue("renewTime", ndate);  //寫入華苓表單顯示畫面
+
+//取得臺灣銀行牌告匯率(有提供CSV檔案)
+var url = "https://rate.bot.com.tw/xrt/flcsv/0/day";
+var data = new Packages.org.apache.http.client.methods.HttpGet(url);
+var httpServer = Packages.org.apache.http.impl.client.HttpClients.createDefault();
+var response = httpServer.execute(data); // 發送
+var code = response.getStatusLine().getStatusCode();
+var result = Packages.org.apache.http.util.EntityUtils.toString(response.getEntity(),"UTF-8");
+ 
+//資料處理
+var rts = result.split("\n");               // 使用「換行」將內容拆分成串列
+for(var i=1; i<rts.length; i++){            // 讀取串列的每個項目  
+    var a = rts[i].split(",");              // 每個項目用逗號拆分成子串列
+    Server.addExeLog(a[0]);
+    var rate1 = new java.math.BigDecimal(a[3]);    //即期買進
+    var rate3 = new java.math.BigDecimal(a[2]);    //現金買進 VND用
+    var rate2 = new java.math.BigDecimal(a[13]);   //即期賣出
+    var rate4 = new java.math.BigDecimal(a[12]);   //現金賣出 VND用
+    if(a[0] == "VND" || a[0] == "KRW" || a[0] == "PHP" || a[0] == "IDR" || a[0] == "MYR"){
+        var sum = rate3.add(rate4);
+    }else{
+        var sum = rate1.add(rate2);
+    }
+    bg = new java.math.BigDecimal("2");    
+    var avg = sum.divide(bg);   //除法
+    //檢查資料庫資料是否重複
+    var sqlChk ="SELECT count(1) FROM TWRATE WHERE DAY = TO_DATE('"+ndate+"','yyyy-mm-dd') AND CURRENCY = '"+a[0]+"' "; // hh24:mi
+    var chk = Server.SQLloadValue(sqlChk);
+    if(chk.get(0).get("COUNT(1)")<=0){
+        var sqlInsert = "INSERT INTO TWRATE(DAY,CURRENCY,SPOTBUY,SPOTSOLD,CASHBUY,CASHSOLD,EXCHANGE) VALUES (TO_DATE('"+ndate+"','yyyy-mm-dd'),'"+a[0]+"','"+rate1+"', '"+rate2+"', '"+rate3+"', '"+rate4+"', '"+avg+"')"; // hh24:mi
+    }else{
+        var sqlInsert = "UPDATE TWRATE SET SPOTBUY = '"+rate1+"',SPOTSOLD = '"+rate2+"',CASHBUY = '"+rate3+"',CASHSOLD = '"+rate4+"',EXCHANGE = '"+avg+"' WHERE DAY = TO_DATE('"+ndate+"','yyyy-mm-dd') AND CURRENCY = '"+a[0]+"'";
+    }
+    try {
+        Server.SQLinsertValue(sqlInsert);
+    } catch(e) {       
+        Server.addExeLog("---Insert Deputy fail:"+sqlInsert);//檢視失敗訊息
+    } finally {       
+    }
+    //存到表單畫面上的表格
+        var hm = new java.util.HashMap();
+        hm.put("幣別",a[0]);
+        hm.put("即期買進", rate1);
+        hm.put("即期賣出", rate2);
+        hm.put("現金買進", rate3);
+        hm.put("現金賣出", rate4);
+        hm.put("平均匯率", avg);
+        tabRate.add(hm);
+    }
+Server.flowTo(MyTask, "AST05271691564187116");  //自動執行完成後指定要走的流程線
